@@ -4,6 +4,13 @@
 #include <errno.h>
 #include <sys/io.h>
 
+
+static int verbose = 0;
+
+#define debug(fmt, ...) do{\
+    if (verbose) fprintf(stderr, fmt, __VA_ARGS__);\
+}while(0)
+
 void print_help(const char *self_name)
 {
 
@@ -72,7 +79,6 @@ int main(int argc, char **argv)
     uint32 app_addr = 0x87800000;   // default uboot load place: 0x87800000
     uint32 csf_addr = 0;            // default none
 
-    int verbose = 0;
 
     char *csf_file = NULL;
     char *app_file = NULL;
@@ -117,7 +123,7 @@ int main(int argc, char **argv)
             }
             if (ret) 
             {
-                fprintf(stderr, "parse error: %s\n", argv[i]);
+                debug("parse error: %s\n", argv[i]);
                 print_help(argv[0]);
                 return -EINVAL;
             }
@@ -134,18 +140,16 @@ int main(int argc, char **argv)
         return -EINVAL;
     }
 
-    if (verbose)
-    {
-        fprintf(stderr, "address of app in memory: 0x%x\n", app_addr);
-        fprintf(stderr, "offset of IVT: 0x%x\n", offset);
-        fprintf(stderr, "initial load region size: 0x%x\n", init_load_size);
-        fprintf(stderr, "path to certificates and signature file: %s\n", csf_file);
-        fprintf(stderr, "path to application: %s\n", app_file);
-        fprintf(stderr, "path to output file: %s\n", out_file ? out_file : "stdout");
-    }
-
+    debug("address of app in memory: 0x%x\n", app_addr);
+    debug("offset of IVT: 0x%x\n", offset);
+    debug("initial load region size: 0x%x\n", init_load_size);
+    debug("path to certificates and signature file: %s\n", csf_file);
+    debug("path to application: %s\n", app_file);
+    debug("path to output file: %s\n", out_file ? out_file : "stdout");
+    
     // start of the image, count from zero address on boot device.
     bd.start = app_addr - init_load_size;
+    debug("boot_data.start: 0x%x\n", bd.start);
 
     size_t fapp_len = 0;
     FILE *fapp = fopen(app_file, "r");
@@ -171,15 +175,19 @@ int main(int argc, char **argv)
     
     // application size and signature size will be added later.
     bd.length = sizeof(ivt_t) + sizeof(boot_data_t) + sizeof(dcd_table) + fapp_len + fcsf_len;
-    if (verbose) 
-        fprintf(stderr, "length of image: 0x%x\n", bd.length);
+    debug("length of image: 0x%x\n", bd.length);
 
     ivt.header = 0x412000D1;
     ivt.entry = app_addr;
+    debug("ivt.entry: 0x%x\n", ivt.entry);
     ivt.p_self = bd.start + offset;
+    debug("ivt.self: 0x%x\n", ivt.p_self);
     ivt.p_boot_data = ivt.p_self + sizeof(ivt_t);
+    debug("ivt.boot_data: 0x%x\n", ivt.p_boot_data);
     ivt.p_dcd = ivt.p_boot_data + sizeof(boot_data_t);
+    debug("ivt.dcd: 0x%x\n", ivt.p_dcd);
     ivt.p_csf = csf_addr;
+    debug("ivt.csf: 0x%x\n", ivt.p_csf);
 
     FILE *fout = stdout;
     if (out_file)
@@ -192,11 +200,9 @@ int main(int argc, char **argv)
     }
 
     int ret = set_file_ptr(fout, offset);
-    if (ret && verbose)
-        fprintf(stderr, "warnning: cannot seek file for IVT offset, write 0x00");
+    if (ret) debug("warnning: cannot seek file for IVT offset, write 0x00\n", NULL);
 
-    if (verbose) 
-        fprintf(stderr, "pointer after offset: 0x%lx\n", ftell(fout));
+    debug("pointer after offset: 0x%lx\n", ftell(fout));
 
     if (!fwrite(&ivt, sizeof(ivt), 1, fout))
         goto exit_write;
@@ -206,11 +212,10 @@ int main(int argc, char **argv)
         goto exit_write;
 
     ret = set_file_ptr(fout, init_load_size);
-    if (ret && verbose)
-        fprintf(stderr, "warnning: cannot seek file for application, write 0x00");
+    if (ret)
+        debug("warnning: cannot seek file for application, write 0x00\n", NULL);
 
-    if (verbose)
-        fprintf(stderr, "pointer after writing header: 0x%lx\n", ftell(fout));
+    debug("pointer after writing header: 0x%lx\n", ftell(fout));
 
     int read_len = 0;
     char read_buf[1024];
