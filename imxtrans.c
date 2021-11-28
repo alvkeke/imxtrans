@@ -73,7 +73,7 @@ int set_file_ptr(FILE *stream, size_t offset)
 int main(int argc, char **argv)
 {
 
-    uint32 offset = 0x200;          // default 1KB
+    uint32 offset = 0x400;          // default 1KB
     uint32 init_load_size = 0x1000; // default 4KB
 
     uint32 app_addr = 0x87800000;   // default uboot load place: 0x87800000
@@ -174,8 +174,8 @@ int main(int argc, char **argv)
     }
     
     // application size and signature size will be added later.
-    bd.length = sizeof(ivt_t) + sizeof(boot_data_t) + sizeof(dcd_table) + fapp_len + fcsf_len;
-    debug("length of image: 0x%x\n", bd.length);
+    bd.length = init_load_size + fapp_len + fcsf_len;
+    debug("length of image: 0x%x, app len: 0x%x, csf len: 0x%x\n", bd.length, fapp_len, fcsf_len);
 
     ivt.header = 0x412000D1;
     ivt.entry = app_addr;
