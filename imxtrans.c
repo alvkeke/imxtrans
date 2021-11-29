@@ -8,12 +8,25 @@
 static int verbose = 0;
 
 #define debug(fmt, ...) do{\
-    if (verbose) fprintf(stderr, fmt, __VA_ARGS__);\
+    if (verbose) fprintf(stderr, fmt "\n", __VA_ARGS__);\
 }while(0)
+
+#define error(fmt, ...) do{\
+    fprintf(stderr, fmt "\n", __VA_ARGS__);\
+}while(0)
+
+
+#define ALIGN_SIZE (0x400UL)
+#define ALIGN_MASK (ALIGN_SIZE - 1)
+
+#define DEFAULT_OFFSET      (0x400U)
+#define DEFAULT_INIT_SIZE   (0x1000U)
+#define DEFAULT_APP_ADDR    (0x87800000U)
+#define DEFAULT_CSF_ADDR    (0x00000000U);
+
 
 void print_help(const char *self_name)
 {
-
     fprintf(stderr, "usage: %s [options] <program_name>\n", self_name);
     fprintf(stderr, "avaliable options:\n");
     fprintf(stderr, "\t-e<hex>   : set the program entry point,          default: 0x87800000\n");
@@ -57,27 +70,54 @@ int hex_parse(const char *src, uint32 *dit)
     return 0;
 }
 
+
+/**
+ * @brief Set the file ptr object, this method can be used to move pointer forward only!!
+ * 
+ * @param stream file pointer
+ * @param offset offset from 0, MUST be bigger than ftell(stream)
+ * @return int 0 for success, -1 for error.
+ */
 int set_file_ptr(FILE *stream, size_t offset)
 {
+    long currp = ftell(stream);
+    if (currp > offset) 
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
     int ret = fseek(stream, offset, SEEK_SET);
     if (ret)
     {
-        for (int i = 0; i < offset; i++)
+        debug("warnning: cannot seek file, write 0x00", NULL);
+        for (int i = 0; i < offset-currp; i++)
         {
-            fputc(0x00, stream);
+            if (fputc(0x00, stream) == -1)
+                return -1;
         }
     }
-    return ret;
+
+    return 0;
+}
+
+int fill_file_zero(FILE *stream, size_t n)
+{
+    for (int i=0; i<n; i++)
+    {
+        if (fputc(0x00, stream) == -1) return -1;        
+    }
+    return 0;
 }
 
 int main(int argc, char **argv)
 {
 
-    uint32 offset = 0x400;          // default 1KB
-    uint32 init_load_size = 0x1000; // default 4KB
+    uint32 offset = DEFAULT_OFFSET;
+    uint32 init_load_size = DEFAULT_INIT_SIZE;
 
-    uint32 app_addr = 0x87800000;   // default uboot load place: 0x87800000
-    uint32 csf_addr = 0;            // default none
+    uint32 app_addr = DEFAULT_APP_ADDR;
+    uint32 csf_addr = DEFAULT_CSF_ADDR;
 
 
     char *csf_file = NULL;
@@ -123,7 +163,7 @@ int main(int argc, char **argv)
             }
             if (ret) 
             {
-                debug("parse error: %s\n", argv[i]);
+                error("parse error: %s", argv[i]);
                 print_help(argv[0]);
                 return -EINVAL;
             }
@@ -140,16 +180,16 @@ int main(int argc, char **argv)
         return -EINVAL;
     }
 
-    debug("address of app in memory: 0x%x\n", app_addr);
-    debug("offset of IVT: 0x%x\n", offset);
-    debug("initial load region size: 0x%x\n", init_load_size);
-    debug("path to certificates and signature file: %s\n", csf_file);
-    debug("path to application: %s\n", app_file);
-    debug("path to output file: %s\n", out_file ? out_file : "stdout");
+    debug("address of app in memory: 0x%x", app_addr);
+    debug("offset of IVT: 0x%x", offset);
+    debug("initial load region size: 0x%x", init_load_size);
+    debug("path to certificates and signature file: %s", csf_file);
+    debug("path to application: %s", app_file);
+    debug("path to output file: %s", out_file ? out_file : "stdout");
     
     // start of the image, count from zero address on boot device.
     bd.start = app_addr - init_load_size;
-    debug("boot_data.start: 0x%x\n", bd.start);
+    debug("boot_data.start: 0x%x", bd.start);
 
     size_t fapp_len = 0;
     FILE *fapp = fopen(app_file, "r");
@@ -172,22 +212,29 @@ int main(int argc, char **argv)
         fcsf_len = ftell(fcsf);
         fseek(fcsf, 0, SEEK_SET);
     }
-    
+
+    size_t align_fapp_len, align_fcsf_len;
+
+    align_fapp_len = fapp_len & ALIGN_MASK ? (fapp_len + ALIGN_SIZE) & (~ALIGN_MASK) : fapp_len;
+    align_fcsf_len = fcsf_len & ALIGN_MASK ? (fcsf_len + ALIGN_SIZE) & (~ALIGN_MASK) : fcsf_len;
+    debug("origin app len: 0x%lx, aligned len: 0x%lx", fapp_len, align_fapp_len);
+    debug("origin csf len: 0x%lx, aligned len: 0x%lx", fcsf_len, align_fcsf_len);
+
     // application size and signature size will be added later.
-    bd.length = init_load_size + fapp_len + fcsf_len;
-    debug("length of image: 0x%x, app len: 0x%x, csf len: 0x%x\n", bd.length, fapp_len, fcsf_len);
+    bd.length = init_load_size + align_fapp_len + align_fcsf_len;
+    debug("length of image: 0x%x", bd.length);
 
     ivt.header = 0x412000D1;
     ivt.entry = app_addr;
-    debug("ivt.entry: 0x%x\n", ivt.entry);
+    debug("ivt.entry: 0x%x", ivt.entry);
     ivt.p_self = bd.start + offset;
-    debug("ivt.self: 0x%x\n", ivt.p_self);
+    debug("ivt.self: 0x%x", ivt.p_self);
     ivt.p_boot_data = ivt.p_self + sizeof(ivt_t);
-    debug("ivt.boot_data: 0x%x\n", ivt.p_boot_data);
+    debug("ivt.boot_data: 0x%x", ivt.p_boot_data);
     ivt.p_dcd = ivt.p_boot_data + sizeof(boot_data_t);
-    debug("ivt.dcd: 0x%x\n", ivt.p_dcd);
+    debug("ivt.dcd: 0x%x", ivt.p_dcd);
     ivt.p_csf = csf_addr;
-    debug("ivt.csf: 0x%x\n", ivt.p_csf);
+    debug("ivt.csf: 0x%x", ivt.p_csf);
 
     FILE *fout = stdout;
     if (out_file)
@@ -199,10 +246,10 @@ int main(int argc, char **argv)
         }
     }
 
-    int ret = set_file_ptr(fout, offset);
-    if (ret) debug("warnning: cannot seek file for IVT offset, write 0x00\n", NULL);
+    if (set_file_ptr(fout, offset))
+        goto exit_write;
 
-    debug("pointer after offset: 0x%lx\n", ftell(fout));
+    debug("pointer after offset: 0x%lx", ftell(fout));
 
     if (!fwrite(&ivt, sizeof(ivt), 1, fout))
         goto exit_write;
@@ -211,11 +258,10 @@ int main(int argc, char **argv)
     if (!fwrite(&dcd_table, sizeof(dcd_table), 1, fout))
         goto exit_write;
 
-    ret = set_file_ptr(fout, init_load_size);
-    if (ret)
-        debug("warnning: cannot seek file for application, write 0x00\n", NULL);
+    if (set_file_ptr(fout, init_load_size))
+        goto exit_write;
 
-    debug("pointer after writing header: 0x%lx\n", ftell(fout));
+    debug("pointer after writing header: 0x%lx", ftell(fout));
 
     int read_len = 0;
     char read_buf[1024];
@@ -224,6 +270,24 @@ int main(int argc, char **argv)
         if (fwrite(read_buf, 1, read_len, fout) != read_len)
             goto exit_write;
     }
+
+    if (fill_file_zero(fout, align_fapp_len - fapp_len))
+        goto exit_write;
+
+    if (fcsf)
+    {
+        while ((read_len = fread(read_buf, 1, sizeof(read_buf), fcsf)))
+        {
+            if (fwrite(read_buf, 1, read_len, fout) != read_len)
+                goto exit_write;
+        }
+        if (fill_file_zero(fout, align_fcsf_len - fcsf_len))
+            goto exit_write;
+    }
+
+    fclose(fapp);
+    if (fcsf) fclose(fcsf);
+    fclose(fout);
 
     return 0;
 
